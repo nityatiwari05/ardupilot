@@ -47,6 +47,18 @@
 
 class AC_AttitudeControl {
 public:
+    // getters for logging / diagnostics
+    float get_last_theta_c() const { return _last_theta_c; }
+    float get_last_theta_c_dot() const { return _last_theta_c_dot; }
+    float get_last_q_filt() const { return _last_q_filt; }
+    float get_last_e_theta() const { return _last_e_theta; }
+    float get_last_ed() const { return _last_ed; }
+    float get_last_omega_c() const { return _last_omega_c; }
+
+    // convenience to get current outer Kp/Kd values (as float)
+    float get_outer_angle_Kp() const { return _p_angle_pitch.kP() * _angle_P_scale.y; }
+    float get_outer_angle_Kd() const { return _p_angle_pitch_d.get(); }
+
     AC_AttitudeControl( AP_AHRS_View &ahrs,
                         const AP_MultiCopter &aparm,
                         AP_Motors& motors) :
@@ -143,14 +155,22 @@ public:
     //
     // These are intentionally simple floats with an internal PT1 state below to avoid
     // depending on external LPF classes.
-    float _p_angle_pitch_d = 0.0f;      // ANG_PIT_D
-    float _p_angle_pitch_df = 15.0f;    // ANG_PIT_DF (Hz)
+    AP_Float _p_angle_pitch_d;     // ANG_PIT_D
+    AP_Float _p_angle_pitch_df;    // ANG_PIT_DF
 
     // PT1 filter state for filtered gyro used by D term (pitch axis)
     float _pit_d_lpf_state = 0.0f;
 
     // previous commanded pitch used to compute finite-difference setpoint rate
     float _theta_cmd_prev = 0.0f;
+    // pd diagnostics (for logging)
+    float _last_theta_c = 0.0f;     // last commanded pitch angle [rad]
+    float _last_theta_c_dot = 0.0f; // last computed setpoint rate [rad/s]
+    float _last_q_filt = 0.0f;      // last filtered gyro pitch rate [rad/s]
+    float _last_e_theta = 0.0f;     // last angle error [rad]
+    float _last_ed = 0.0f;          // last derivative error = theta_c_dot - q_filt [rad/s]
+    float _last_omega_c = 0.0f;     // last produced pitch-rate command [rad/s]
+
     // ---------------------------
 
     // get the slew yaw rate limit in radians/s

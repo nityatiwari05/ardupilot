@@ -172,7 +172,10 @@ struct PACKED log_ANG {
     float pitch;
     float control_yaw;
     float yaw;
-    float sensor_dt;
+  float sensor_dt;
+  // Additional diagnostic fields: outer-loop pitch D and derivative error
+  float pitch_outer_D; // D contribution (rad/s)
+  float pitch_deriv_error; // theta_c_dot - q_filt (rad/s)
 };
 
 #define PSCx_FMT "Qfffffffff"
@@ -201,4 +204,4 @@ struct PACKED log_ANG {
     { LOG_RATE_MSG, sizeof(log_Rate), \
         "RATE", "Qfffffffffffff",  "TimeUS,RDes,R,ROut,PDes,P,POut,YDes,Y,YOut,ADes,A,AOut,AOutSlew", "skk-kk-kk-oo--", "F?????????BB--" , true }, \
     { LOG_ANG_MSG, sizeof(log_ANG),\
-        "ANG", "Qfffffff", "TimeUS,DesRoll,Roll,DesPitch,Pitch,DesYaw,Yaw,Dt", "sddddhhs", "F0000000" , true }
+      "ANG", "Qfffffffff", "TimeUS,DesRoll,Roll,DesPitch,Pitch,DesYaw,Yaw,Dt,PitchD,PitchEd", "sddddhhff", "F00000000" , true }

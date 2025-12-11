@@ -13,6 +13,9 @@ void AC_AttitudeControl::Write_ANG() const
 {
     Vector3f targets = get_att_target_euler_rad() * RAD_TO_DEG;
 
+    // compute outer-loop pitch D contribution for logging (Kd * (theta_c_dot - q_filt))
+    float pitch_D = _p_angle_pitch_d.get() * _last_ed;
+
     const struct log_ANG pkt{
         LOG_PACKET_HEADER_INIT(LOG_ANG_MSG),
         time_us         : AP::scheduler().get_loop_start_time_us(),
@@ -22,7 +25,9 @@ void AC_AttitudeControl::Write_ANG() const
         pitch           : degrees(_ahrs.pitch),
         control_yaw     : wrap_360(targets.z),
         yaw             : wrap_360(degrees(_ahrs.yaw)),
-        sensor_dt       : AP::scheduler().get_last_loop_time_s()
+        sensor_dt       : AP::scheduler().get_last_loop_time_s(),
+        pitch_outer_D   : pitch_D,
+        pitch_deriv_error : _last_ed
     };
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
 }

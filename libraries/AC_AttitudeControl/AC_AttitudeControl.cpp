@@ -16,6 +16,10 @@ extern const AP_HAL::HAL& hal;
  #define AC_ATTITUDE_CONTROL_ANGLE_LIMIT_MIN     10.0   // Min lean angle so that vehicle can maintain limited control
  #define AC_ATTITUDE_CONTROL_AFTER_RATE_CONTROL 1
 #endif
+#define AC_ATTITUDE_CONTROL_PIT_D_DEFAULT 0.0f
+#define AC_ATTITUDE_CONTROL_PIT_D_MIN     0.0f
+#define AC_ATTITUDE_CONTROL_PIT_D_MAX     5.0f
+
 
 AC_AttitudeControl *AC_AttitudeControl::_singleton;
 
@@ -417,9 +421,16 @@ void AC_AttitudeControl::input_euler_angle_roll_pitch_euler_rate_yaw_rad(float e
     }
 
     //
-    // --- NEW: PD outer-loop for pitch angle (derivative-on-measurement + setpoint-rate feedforward)
+    // NEW: PD outer-loop for pitch angle (derivative-on-measurement + setpoint-rate feedforward)
     //
     float dt = MAX(1e-6f, _dt_s);
+
+    // Clamp the D parameter for pitch control
+    _p_angle_pitch_d.set(constrain_float(_p_angle_pitch_d.get(), AC_ATTITUDE_CONTROL_PIT_D_MIN, AC_ATTITUDE_CONTROL_PIT_D_MAX));
+
+    // Get the derivative factor (clamped and saved)
+    float fD = constrain_float(_p_angle_pitch_df.get(), 2.0f, 80.0f);
+    _p_angle_pitch_df.set(fD);
 
     // finite-difference setpoint rate
     float theta_c_dot = (euler_pitch_angle_rad - _theta_cmd_prev) / dt;
@@ -429,8 +440,7 @@ void AC_AttitudeControl::input_euler_angle_roll_pitch_euler_rate_yaw_rad(float e
     const Vector3f gyro_latest = get_latest_gyro();
     float gyro_pitch = gyro_latest.y;
 
-    // PT1 filter update
-    float fD = constrain_float(_p_angle_pitch_df, 2.0f, 80.0f);
+    // PT1 filter update (filter the measured gyro pitch rate for D term)
     float omega_c_denom = 1.0f + 2.0f * M_PI * fD * dt;
     float alpha = (2.0f * M_PI * fD * dt) / omega_c_denom;
     _pit_d_lpf_state += alpha * (gyro_pitch - _pit_d_lpf_state);
@@ -444,7 +454,7 @@ void AC_AttitudeControl::input_euler_angle_roll_pitch_euler_rate_yaw_rad(float e
     float p_term = angleP_pitch * e_theta;
 
     // D term
-    float d_term = _p_angle_pitch_d * (theta_c_dot - q_filt);
+    float d_term = _p_angle_pitch_d.get() * (theta_c_dot - q_filt);
 
     // pitch-rate command
     float omega_c = p_term + d_term;
@@ -458,21 +468,14 @@ void AC_AttitudeControl::input_euler_angle_roll_pitch_euler_rate_yaw_rad(float e
     // write to pitch axis rate target
     _ang_vel_target_rads.y = omega_c;
 
-    // Log data
-    AP::logger().Write(
-        "APDP", "TimeUS,ThC,Th,ThCd,Qf,E,Ed,Oc,Kp,Kd",
-        "Qfffffffff",
-        AP_HAL::micros64(),
-        (double)euler_pitch_angle_rad,
-        (double)_euler_angle_target_rad.y,
-        (double)theta_c_dot,
-        (double)q_filt,
-        (double)e_theta,
-        (double)(theta_c_dot - q_filt),
-        (double)omega_c,
-        (double)angleP_pitch,
-        (double)_p_angle_pitch_d
-    );
+    // logging: store last values for logging (consumed by Write_ANG)
+    _last_theta_c      = euler_pitch_angle_rad;
+    _last_theta_c_dot  = theta_c_dot;
+    _last_q_filt       = q_filt;
+    _last_e_theta      = e_theta;
+    _last_ed           = (theta_c_dot - q_filt);
+    _last_omega_c      = omega_c;
+    
 
     // Call main quaternion controller
     attitude_controller_run_quat();
@@ -1472,6 +1475,18 @@ bool AC_AttitudeControl::pre_arm_checks(const char *param_prefix,
             hal.util->snprintf(failure_msg, failure_msg_len, "%s_%s_D must be >= 0", param_prefix, pid_name);
             return false;
         }
+    }
+    // sanity-check new pitch-angle outer-loop D parameter
+    float ang_pit_d = _p_angle_pitch_d.get();
+    if (is_negative(ang_pit_d) || ang_pit_d > AC_ATTITUDE_CONTROL_PIT_D_MAX) {
+        hal.util->snprintf(failure_msg, failure_msg_len, "%s_ANG_PIT_D must be >= 0 and <= %.2f", param_prefix, (double)AC_ATTITUDE_CONTROL_PIT_D_MAX);
+        return false;
+    }
+    // sanity-check pitch D filter cutoff (Hz)
+    float ang_pit_df = _p_angle_pitch_df.get();
+    if (ang_pit_df < 0.0f || ang_pit_df > 1000.0f) {
+        hal.util->snprintf(failure_msg, failure_msg_len, "%s_ANG_PIT_DF out of range", param_prefix);
+        return false;
     }
     return true;
 }
