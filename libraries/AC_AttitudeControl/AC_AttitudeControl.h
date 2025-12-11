@@ -134,6 +134,24 @@ public:
 
     // set the yaw angular velocity limit in radians/s
     void set_ang_vel_yaw_max_rads(float vel_yaw_max_rads) { _ang_vel_yaw_max_degs.set(degrees(vel_yaw_max_rads)); }
+    
+    // ---------------------------
+    // New members for pitch-angle PD outer-loop
+    //
+    // ANG_PIT_D  - derivative gain (dimensionless)
+    // ANG_PIT_DF - derivative filter cutoff in Hz (used by a PT1 filter)
+    //
+    // These are intentionally simple floats with an internal PT1 state below to avoid
+    // depending on external LPF classes.
+    float _p_angle_pitch_d = 0.0f;      // ANG_PIT_D
+    float _p_angle_pitch_df = 15.0f;    // ANG_PIT_DF (Hz)
+
+    // PT1 filter state for filtered gyro used by D term (pitch axis)
+    float _pit_d_lpf_state = 0.0f;
+
+    // previous commanded pitch used to compute finite-difference setpoint rate
+    float _theta_cmd_prev = 0.0f;
+    // ---------------------------
 
     // get the slew yaw rate limit in radians/s
     float get_slew_yaw_max_rads() const;

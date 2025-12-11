@@ -1,0 +1,166 @@
+diff --git a/libraries/AC_AttitudeControl/AC_AttitudeControl.h b/libraries/AC_AttitudeControl/AC_AttitudeControl.h
+index 1111111..2222222 100644
+--- a/libraries/AC_AttitudeControl/AC_AttitudeControl.h
++++ b/libraries/AC_AttitudeControl/AC_AttitudeControl.h
+@@
+     // get the yaw angular velocity limit in radians/s
+     float get_ang_vel_yaw_max_rads() const { return radians(_ang_vel_yaw_max_degs); }
+ 
+     // set the yaw angular velocity limit in radians/s
+     void set_ang_vel_yaw_max_rads(float vel_yaw_max_rads) { _ang_vel_yaw_max_degs.set(degrees(vel_yaw_max_rads)); }
+ 
++    // ---------------------------
++    // New members for pitch-angle PD outer-loop
++    //
++    // ANG_PIT_D  - derivative gain (dimensionless)
++    // ANG_PIT_DF - derivative filter cutoff in Hz (used by a PT1 filter)
++    //
++    // These are intentionally simple floats with an internal PT1 state below to avoid
++    // depending on external LPF classes.
++    float _p_angle_pitch_d = 0.0f;      // ANG_PIT_D
++    float _p_angle_pitch_df = 15.0f;    // ANG_PIT_DF (Hz)
++
++    // PT1 filter state for filtered gyro used by D term (pitch axis)
++    float _pit_d_lpf_state = 0.0f;
++
++    // previous commanded pitch used to compute finite-difference setpoint rate
++    float _theta_cmd_prev = 0.0f;
++    // ---------------------------
+ 
+     // get the slew yaw rate limit in rad/s
+     float get_slew_yaw_max_rads() const
+     {
+         if (!is_positive(_ang_vel_yaw_max_degs)) {
+             return cd_to_rad(_slew_yaw_cds);
+         }
+         return MIN(radians(_ang_vel_yaw_max_degs), cd_to_rad(_slew_yaw_cds));
+     }
+ 
+@@
+     // Return the angular velocity of the target (setpoint) [rad/s] in the target attitude frame
+     const Vector3f& get_attitude_target_ang_vel() const { return _ang_vel_target_rads;}
+ 
+     // Return the angle between the target thrust vector and the current thrust vector.
+     float get_att_error_angle_deg() const { return degrees(_thrust_error_angle_rad); }
+ 
+     // Returns the current attitude target as 321 Euler angles in centidegrees.
+     // Note: Centidegrees are used for legacy compatibility with older messaging formats.
+     void rate_bf_yaw_target(float rate_cds) { _ang_vel_body_rads.z = cd_to_rad(rate_cds); }
+ 
+     // Set x-axis system identification angular velocity in radians/s
+     void rate_bf_roll_sysid_rads(float rate_rads) { _sysid_ang_vel_body_rads.x = rate_rads; }
+ 
+     // Set y-axis system identification angular velocity in radians/s
+     void rate_bf_pitch_sysid_rads(float rate_rads) { _sysid_ang_vel_body_rads.y = rate_rads; }
+ 
+     // Set z-axis system identification angular velocity in radians/s
+     void rate_bf_yaw_sysid_rads(float rate_rads) { _sysid_ang_vel_body_rads.z = rate_rads; }
+ 
+diff --git a/libraries/AC_AttitudeControl/AC_AttitudeControl.cpp b/libraries/AC_AttitudeControl/AC_AttitudeControl.cpp
+index 3333333..4444444 100644
+--- a/libraries/AC_AttitudeControl/AC_AttitudeControl.cpp
++++ b/libraries/AC_AttitudeControl/AC_AttitudeControl.cpp
+@@
+     AP_GROUPINFO("LAND_Y_MULT", 23, AC_AttitudeControl, _land_yaw_mult, 1.0),
+-
++    // @Param: ANG_PIT_D
++    // @DisplayName: Pitch axis angle controller D gain
++    // @Description: Pitch axis angle controller D gain (dimensionless). Used together with ANG_PIT_P for a PD outer loop.
++    // @Range: 0.0 5.0
++    // @User: Advanced
++    AP_GROUPINFO("ANG_PIT_D", 24, AC_AttitudeControl, _p_angle_pitch_d, 0.0f),
++
++    // @Param: ANG_PIT_DF
++    // @DisplayName: Pitch D-term filter cutoff (Hz)
++    // @Description: Cutoff frequency for the PT1 filter applied to the measured gyro rate used by the D term.
++    // @Units: Hz
++    // @Range: 2.0 80.0
++    // @User: Advanced
++    AP_GROUPINFO("ANG_PIT_DF", 25, AC_AttitudeControl, _p_angle_pitch_df, 15.0f),
+ 
+     AP_GROUPEND
+ };
+ 
+ constexpr Vector3f AC_AttitudeControl::VECTORF_111;
+ 
+@@
+ void AC_AttitudeControl::input_euler_angle_roll_pitch_euler_rate_yaw_rad(float euler_roll_angle_rad, float euler_pitch_angle_rad, float euler_yaw_rate_rads)
+ {
+     // update attitude target
+     update_attitude_target();
+ 
+     // calculate the attitude target euler angles
+     _attitude_target.to_euler(_euler_angle_target_rad);
+ 
+     // Add roll trim to compensate tail rotor thrust in heli (will return zero on multirotors)
+     euler_roll_angle_rad += get_roll_trim_rad();
+ 
+@@
+     } else {
+         // When feedforward is not enabled, the target euler angle is input into the target and the feedforward rate is zeroed.
+         _euler_angle_target_rad.x = euler_roll_angle_rad;
+         _euler_angle_target_rad.y = euler_pitch_angle_rad;
+         _euler_angle_target_rad.z += euler_yaw_rate_rads * _dt_s;
+         // Compute quaternion target attitude
+         _attitude_target.from_euler(_euler_angle_target_rad.x, _euler_angle_target_rad.y, _euler_angle_target_rad.z);
+ 
+         // Set rate feedforward requests to zero
+         _euler_rate_target_rads.zero();
+         _ang_vel_target_rads.zero();
+     }
+ 
+-    // Call quaternion attitude controller
+-    attitude_controller_run_quat();
++    //
++    // --- NEW: PD outer-loop for pitch angle (derivative-on-measurement + setpoint-rate feedforward)
++    //
++    // Compute finite-difference setpoint rate for commanded pitch (theta_c_dot)
++    float dt = MAX(1e-6f, _dt_s);
++    float theta_c_dot = (euler_pitch_angle_rad - _theta_cmd_prev) / dt;
++    _theta_cmd_prev = euler_pitch_angle_rad;
++
++    // measured gyro pitch rate (body-frame). get_latest_gyro() returns Vector3f (rad/s), with .y = pitch rate
++    const Vector3f gyro_latest = get_latest_gyro();
++    float gyro_pitch = gyro_latest.y;
++
++    // PT1 filter update for measured gyro pitch rate (simple discrete PT1)
++    // alpha = (2*pi*fD*Ts) / (1 + 2*pi*fD*Ts)
++    float fD = constrain_float(_p_angle_pitch_df, 2.0f, 80.0f);
++    float omega_c_denom = 1.0f + 2.0f * M_PI * fD * dt;
++    float alpha = (2.0f * M_PI * fD * dt) / omega_c_denom;
++    _pit_d_lpf_state += alpha * (gyro_pitch - _pit_d_lpf_state);
++    float q_filt = _pit_d_lpf_state;
++
++    // angle error: use wrap_PI between commanded euler_pitch_angle_rad and current controller target angle
++    float e_theta = wrap_PI(euler_pitch_angle_rad - _euler_angle_target_rad.y);
++
++    // compute P contribution (use existing angle P scaled)
++    const float angleP_pitch = _p_angle_pitch.kP() * _angle_P_scale.y;
++    float p_term = angleP_pitch * e_theta;
++
++    // D contribution using new param _p_angle_pitch_d (dimensionless)
++    float d_term = _p_angle_pitch_d * (theta_c_dot - q_filt);
++
++    // produce body-frame pitch-rate command (rad/s)
++    float omega_c = p_term + d_term;
++
++    // clamp to existing pitch-rate limit
++    float rate_limit = radians(_ang_vel_pitch_max_degs);
++    if (is_positive(_ang_vel_pitch_max_degs)) {
++        omega_c = constrain_float(omega_c, -rate_limit, rate_limit);
++    }
++
++    // overwrite the pitch component of the body-frame angular velocity target:
++    _ang_vel_target_rads.y = omega_c;
++
++    // Log the PD signals for offline analysis (DataFlash). Fields: TimeUS, ThC, Th, ThCd, Qf, E, Ed, Oc, Kp, Kd
++    AP::logger().Write(
++        "APDP", "TimeUS,ThC,Th,ThCd,Qf,E,Ed,Oc,Kp,Kd",
++        "Qfffffffff",
++        AP_HAL::micros64(), (double)euler_pitch_angle_rad, (double)_euler_angle_target_rad.y, (double)theta_c_dot, (double)q_filt,
++        (double)e_theta, (double)(theta_c_dot - q_filt), (double)omega_c, (double)angleP_pitch, (double)_p_angle_pitch_d);
++
++    // Call quaternion attitude controller
++    attitude_controller_run_quat();
+ }
+ 

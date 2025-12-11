@@ -173,6 +173,22 @@ const AP_Param::GroupInfo AC_AttitudeControl::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("LAND_Y_MULT", 23, AC_AttitudeControl, _land_yaw_mult, 1.0),
 
+    // @Param: ANG_PIT_D
+    // @DisplayName: Pitch axis angle controller D gain
+    // @Description: Pitch axis angle controller D gain (dimensionless). Used together with ANG_PIT_P for a PD outer loop.
+    // @Range: 0.0 5.0
+    // @User: Advanced
+    AP_GROUPINFO("ANG_PIT_D", 24, AC_AttitudeControl, _p_angle_pitch_d, 0.0f),
+
+    // @Param: ANG_PIT_DF
+    // @DisplayName: Pitch D-term filter cutoff (Hz)
+    // @Description: Cutoff frequency for the PT1 filter applied to the measured gyro rate used by the D term.
+    // @Units: Hz
+    // @Range: 2.0 80.0
+    // @User: Advanced
+    AP_GROUPINFO("ANG_PIT_DF", 25, AC_AttitudeControl, _p_angle_pitch_df, 15.0f),
+
+
     AP_GROUPEND
 };
 
@@ -400,8 +416,67 @@ void AC_AttitudeControl::input_euler_angle_roll_pitch_euler_rate_yaw_rad(float e
         _ang_vel_target_rads.zero();
     }
 
-    // Call quaternion attitude controller
+    //
+    // --- NEW: PD outer-loop for pitch angle (derivative-on-measurement + setpoint-rate feedforward)
+    //
+    float dt = MAX(1e-6f, _dt_s);
+
+    // finite-difference setpoint rate
+    float theta_c_dot = (euler_pitch_angle_rad - _theta_cmd_prev) / dt;
+    _theta_cmd_prev = euler_pitch_angle_rad;
+
+    // measured gyro pitch rate
+    const Vector3f gyro_latest = get_latest_gyro();
+    float gyro_pitch = gyro_latest.y;
+
+    // PT1 filter update
+    float fD = constrain_float(_p_angle_pitch_df, 2.0f, 80.0f);
+    float omega_c_denom = 1.0f + 2.0f * M_PI * fD * dt;
+    float alpha = (2.0f * M_PI * fD * dt) / omega_c_denom;
+    _pit_d_lpf_state += alpha * (gyro_pitch - _pit_d_lpf_state);
+    float q_filt = _pit_d_lpf_state;
+
+    // angle error
+    float e_theta = wrap_PI(euler_pitch_angle_rad - _euler_angle_target_rad.y);
+
+    // P gain
+    const float angleP_pitch = _p_angle_pitch.kP() * _angle_P_scale.y;
+    float p_term = angleP_pitch * e_theta;
+
+    // D term
+    float d_term = _p_angle_pitch_d * (theta_c_dot - q_filt);
+
+    // pitch-rate command
+    float omega_c = p_term + d_term;
+
+    // clamp to rate limits
+    float rate_limit = radians(_ang_vel_pitch_max_degs);
+    if (is_positive(_ang_vel_pitch_max_degs)) {
+        omega_c = constrain_float(omega_c, -rate_limit, rate_limit);
+    }
+
+    // write to pitch axis rate target
+    _ang_vel_target_rads.y = omega_c;
+
+    // Log data
+    AP::logger().Write(
+        "APDP", "TimeUS,ThC,Th,ThCd,Qf,E,Ed,Oc,Kp,Kd",
+        "Qfffffffff",
+        AP_HAL::micros64(),
+        (double)euler_pitch_angle_rad,
+        (double)_euler_angle_target_rad.y,
+        (double)theta_c_dot,
+        (double)q_filt,
+        (double)e_theta,
+        (double)(theta_c_dot - q_filt),
+        (double)omega_c,
+        (double)angleP_pitch,
+        (double)_p_angle_pitch_d
+    );
+
+    // Call main quaternion controller
     attitude_controller_run_quat();
+
 }
 
 // Sets desired roll, pitch, and yaw angles (in centidegrees).
