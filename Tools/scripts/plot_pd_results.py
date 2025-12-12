@@ -112,7 +112,7 @@ class PDLogAnalyzer:
         
         ang = self.data['ANG']
         
-        fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+        fig, axes = plt.subplots(2, 1, figsize=(12, 10))
         fig.suptitle(title, fontsize=14, fontweight='bold')
         
         # Plot 1: Pitch angle (desired vs actual)
@@ -125,21 +125,21 @@ class PDLogAnalyzer:
         ax1.legend(loc='best')
         
         # Plot 2: Pitch rate (from RATE messages if available)
-        ax2 = axes[1]
-        if 'RATE' in self.data:
-            rate = self.data['RATE']
-            ax2.plot(rate['time'], rate['control_pitch'], 'b--', label='Desired Rate', linewidth=2)
-            ax2.plot(rate['time'], rate['pitch'], 'r-', label='Actual Rate', linewidth=1.5)
-            ax2.set_ylabel('Pitch Rate (deg/s)', fontsize=11)
-            ax2.set_title('Pitch Rate Response', fontsize=12)
-        else:
-            ax2.text(0.5, 0.5, 'RATE data not available', 
-                    ha='center', va='center', transform=ax2.transAxes)
-        ax2.grid(True, alpha=0.3)
-        ax2.legend(loc='best')
+        # ax2 = axes[1]
+        # if 'RATE' in self.data:
+        #     rate = self.data['RATE']
+        #     ax2.plot(rate['time'], rate['control_pitch'], 'b--', label='Desired Rate', linewidth=2)
+        #     ax2.plot(rate['time'], rate['pitch'], 'r-', label='Actual Rate', linewidth=1.5)
+        #     ax2.set_ylabel('Pitch Rate (deg/s)', fontsize=11)
+        #     ax2.set_title('Pitch Rate Response', fontsize=12)
+        # else:
+        #     ax2.text(0.5, 0.5, 'RATE data not available', 
+        #             ha='center', va='center', transform=ax2.transAxes)
+        # ax2.grid(True, alpha=0.3)
+        # ax2.legend(loc='best')
         
         # Plot 3: PD terms
-        ax3 = axes[2]
+        ax3 = axes[1]
         ax3_twin = ax3.twinx()
         
         # D term contribution
