@@ -163,6 +163,8 @@ struct PACKED log_Rate {
 // @Field: DesYaw: vehicle desired yaw
 // @Field: Yaw: achieved vehicle yaw
 // @Field: Dt: attitude delta time
+// @Field: PitchD: pitch outer-loop D term contribution
+// @Field: PitchEd: pitch derivative error (theta_c_dot - q_filt)
 struct PACKED log_ANG {
     LOG_PACKET_HEADER;
     uint64_t time_us;
@@ -204,7 +206,7 @@ struct PACKED log_ANG {
     { LOG_RATE_MSG, sizeof(log_Rate), \
         "RATE", "Qfffffffffffff",  "TimeUS,RDes,R,ROut,PDes,P,POut,YDes,Y,YOut,ADes,A,AOut,AOutSlew", "skk-kk-kk-oo--", "F?????????BB--" , true }, \
     { LOG_ANG_MSG, sizeof(log_ANG), \
-        "ANG", "Qffffffffff", "TimeUS,DesRoll,Roll,DesPitch,Pitch,DesYaw,Yaw,Dt,PitchD,PitchEd", "sddddhhffff", "F0000000000",true }
+      "ANG", "Qfffffffff", "TimeUS,DesRoll,Roll,DesPitch,Pitch,DesYaw,Yaw,Dt,PitchD,PitchEd", "sddddhhskk", "F000000000", true}
 
 
 
